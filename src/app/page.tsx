@@ -1,103 +1,229 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useEffect } from "react";
+import { db } from "../../lib/firebase";
+import {
+  collection,
+  addDoc,
+  updateDoc,
+  doc,
+  getDocs,
+  query,
+  orderBy,
+} from "firebase/firestore";
+
+interface Todo {
+  id?: string;
+  text: string;
+  completed: boolean;
+  createdDate?: string | null;
+  completedDate?: string | null;
+  updatedDate?: string | null;
+  removing?: boolean;
+}
+
+// Inline component for todo display and editing
+function TodoItemInner({
+  todo,
+  onSave,
+}: {
+  todo: Todo;
+  onSave: (id: string, text: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(todo.text);
+
+  useEffect(() => {
+    setValue(todo.text);
+  }, [todo.text]);
+
+  const startEdit = () => setEditing(true);
+  const cancelEdit = () => {
+    setValue(todo.text);
+    setEditing(false);
+  };
+
+  const save = () => {
+    if (!todo.id) return;
+    if (value.trim() === "") return;
+    onSave(todo.id, value.trim());
+    setEditing(false);
+  };
+
+  return (
+    <div>
+      {!editing ? (
+        <div className="flex items-center">
+          <span className={todo.completed ? "line-through text-gray-400" : ""}>
+            {todo.text}
+          </span>
+          <button
+            onClick={startEdit}
+            className="ml-2 text-xs text-blue-500 hover:underline"
+            aria-label="Edit todo"
+          >
+            Edit
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center">
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            className="border p-1 rounded mr-2"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+              if (e.key === "Escape") cancelEdit();
+            }}
+          />
+          <button onClick={save} className="text-sm text-green-600 mr-2">
+            Save
+          </button>
+          <button onClick={cancelEdit} className="text-sm text-red-500">
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [input, setInput] = useState("");
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+  const todosCollection = collection(db, "todos");
+
+  // Load todos from Firestore
+  useEffect(() => {
+    const fetchTodos = async () => {
+      // Fetch all and filter client-side so we show only active (not completed) todos.
+      const snapshot = await getDocs(todosCollection);
+      const all = snapshot.docs.map((doc) => ({ id: doc.id, ...(doc.data() as Omit<Todo, "id">) })) as Todo[];
+      const active = all.filter((t) => t.completed !== true).sort((a, b) => (b.createdDate || "").localeCompare(a.createdDate || ""));
+      setTodos(active);
+    };
+    fetchTodos();
+  }, []);
+
+  const handleAdd = async () => {
+    if (!input.trim()) return;
+    const now = new Date().toISOString();
+    const newTodo: Todo = { text: input, completed: false, createdDate: now };
+    const docRef = await addDoc(todosCollection, newTodo);
+    setTodos([...todos, { ...newTodo, id: docRef.id }]);
+    setInput("");
+  };
+
+  // allow Enter key to submit
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void handleAdd();
+    }
+  };
+
+  // Update an existing todo text and set updatedAt in Firestore
+  const updateTodoText = async (id: string, text: string) => {
+    const todoRef = doc(db, "todos", id);
+    const updatedAt = new Date().toISOString();
+    try {
+      await updateDoc(todoRef, { text, updatedAt });
+      setTodos((prev) =>
+        prev.map((t) =>
+          t.id === id ? { ...t, text, updatedDate: updatedAt } : t
+        )
+      );
+    } catch (err) {
+      console.error("Failed to update todo text:", err);
+    }
+  };
+
+  const toggleComplete = async (todo: Todo) => {
+    if (!todo.id) return;
+    const todoRef = doc(db, "todos", todo.id);
+    const updated = {
+      completed: !todo.completed,
+      completedDate: !todo.completed ? new Date().toISOString() : null,
+    };
+
+    try {
+      // Update Firestore first
+      await updateDoc(todoRef, updated);
+
+      if (!todo.completed) {
+        // item was just checked -> animate out then remove from UI
+        setTodos((prev) =>
+          prev.map((t) =>
+            t.id === todo.id ? { ...t, ...updated, removing: true } : t
+          )
+        );
+
+        // Wait for CSS animation to complete before removing from state
+        setTimeout(() => {
+          setTodos((prev) => prev.filter((t) => t.id !== todo.id));
+        }, 500); // match duration in ms
+      } else {
+        // item was unchecked -> just update in place
+        setTodos((prev) =>
+          prev.map((t) => (t.id === todo.id ? { ...t, ...updated } : t))
+        );
+      }
+    } catch (err) {
+      console.error("Failed to update todo:", err);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center p-8">
+      <h1 className="text-4xl font-bold mb-8">Todo List</h1>
+
+      <div className="flex mb-6 w-full max-w-md">
+        <input
+          type="text"
+          className="flex-1 p-2 border rounded-l-md focus:outline-none"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Add a new task"
+        />
+        <button
+          className="bg-blue-500 text-white px-4 rounded-r-md hover:bg-blue-600"
+          onClick={handleAdd}
+        >
+          Add
+        </button>
+      </div>
+
+      <div className="w-full max-w-md mb-6">
+        <a
+          href="/completed"
+          className="inline-block text-sm text-blue-600 hover:underline"
+        >
+          View completed goals
+        </a>
+      </div>
+
+      <ul className="w-full max-w-md">
+        {todos.map((todo) => (
+          <li
+            key={todo.id}
+            className={`flex justify-between items-center p-2 mb-2 bg-white rounded shadow ${
+              todo.removing ? "fade-out" : ""
+            }`}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+            <div>
+              <input
+                type="checkbox"
+                checked={todo.completed}
+                onChange={() => toggleComplete(todo)}
+                className="mr-2"
+              />
+              <TodoItemInner todo={todo} onSave={updateTodoText} />
+            </div>
+            {/* created/completed dates are stored in DB but intentionally not shown to users */}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

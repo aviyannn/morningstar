@@ -24,3 +24,31 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Fade out + collapse animation for removed todos */
+.fade-out {
+  animation: fadeOut 500ms ease forwards;
+}
+
+@keyframes fadeOut {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+    height: auto;
+    margin-bottom: 0.5rem; /* match .mb-2 spacing */
+  }
+  80% {
+    opacity: 0.2;
+    transform: translateY(-4px);
+    height: auto;
+    margin-bottom: 0.25rem;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px);
+    height: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
